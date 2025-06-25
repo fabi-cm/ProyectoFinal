@@ -2,154 +2,213 @@
 #include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <WiFiManager.h>
 #include "SensorHumedad.h"
 #include "ActuadorRiego.h"
-#include <SensorNivelAgua.h>
+#include "SensorNivelAgua.h"
 #include "config.h"
-#include <WiFiManager.h>
 
-#define PIN_SENSOR 39
-#define PIN_RELE 4
-#define PIN_SENSOR_NIVEL 36
+#define SOIL_SENSOR_PIN 39
+#define RELAY_PIN 4
+#define WATER_LEVEL_SENSOR_PIN 36
+#define RESET_BUTTON_PIN 0 // Opcional: botón para borrar configuración WiFi
 
-WiFiClientSecure wiFiClient;
-PubSubClient mqttClient(wiFiClient);
-SensorHumedad sensor(PIN_SENSOR);
-ActuadorRiego bomba(PIN_RELE);
-SensorNivelAgua nivelAgua(PIN_SENSOR_NIVEL, -1, 2000);
+WiFiClientSecure secureClient;
+PubSubClient mqttClient(secureClient);
+SensorHumedad soilSensor(SOIL_SENSOR_PIN);
+ActuadorRiego waterPump(RELAY_PIN);
+SensorNivelAgua waterLevelSensor(WATER_LEVEL_SENSOR_PIN, -1, 2000);
 
-bool alertaAguaEnviada = false;
-unsigned long ultimoAvisoAgua = 0;
-const unsigned long intervaloAvisoAgua = 3600000;
-String modo = "AUTOMATICO"; 
+bool waterAlertSent = false;
+unsigned long lastWaterAlertTime = 0;
+const unsigned long waterAlertInterval = 3600000; // 1 hora
 
-void publishShadowState() {
-  StaticJsonDocument<128> doc;
-  doc["state"]["reported"]["humedad"] = sensor.leerHumedad();
-  doc["state"]["reported"]["bomba"] = digitalRead(PIN_RELE) ? "ON" : "OFF";
-  doc["state"]["reported"]["nivel_agua"] = nivelAgua.leerNivel();
-  doc["state"]["reported"]["necesita_recarga"] = nivelAgua.necesitaRecarga();
-  doc["state"]["reported"]["modo"] = modo;
+String currentMode = "AUTOMATIC";
 
-  if(nivelAgua.necesitaRecarga() && 
-     (millis() - ultimoAvisoAgua > intervaloAvisoAgua || !alertaAguaEnviada)) {
-    doc["state"]["reported"]["alerta"] = "NIVEL_BAJO_AGUA";
-    alertaAguaEnviada = true;
-    ultimoAvisoAgua = millis();
-  } else if(!nivelAgua.necesitaRecarga() && alertaAguaEnviada) {
-    doc["state"]["reported"]["alerta"] = "NIVEL_NORMAL_AGUA";
-    alertaAguaEnviada = false;
+void publishShadowState()
+{
+  StaticJsonDocument<512> doc;
+  doc["state"]["reported"]["humidity"] = soilSensor.leerHumedad();
+  doc["state"]["reported"]["pump"] = digitalRead(RELAY_PIN) ? "ON" : "OFF";
+  doc["state"]["reported"]["water_level"] = waterLevelSensor.leerNivel();
+  doc["state"]["reported"]["needs_refill"] = waterLevelSensor.necesitaRecarga();
+  doc["state"]["reported"]["mode"] = currentMode;
+
+  if (waterLevelSensor.necesitaRecarga() &&
+      (millis() - lastWaterAlertTime > waterAlertInterval || !waterAlertSent))
+  {
+    doc["state"]["reported"]["alert"] = "LOW_WATER_LEVEL";
+    waterAlertSent = true;
+    lastWaterAlertTime = millis();
+  }
+  else if (!waterLevelSensor.necesitaRecarga() && waterAlertSent)
+  {
+    doc["state"]["reported"]["alert"] = "NORMAL_WATER_LEVEL";
+    waterAlertSent = false;
   }
 
-  char jsonBuffer[128];
+  char jsonBuffer[512];
   serializeJson(doc, jsonBuffer);
   mqttClient.publish(SHADOW_UPDATE, jsonBuffer);
-  Serial.println("Estado reportado a Shadow");
+  Serial.println("📤 Shadow state published.");
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Mensaje recibido en: ");
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("📩 Message received on topic: ");
   Serial.println(topic);
 
-  StaticJsonDocument<128> doc;
-  deserializeJson(doc, payload, length);
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, payload, length);
+  if (error)
+  {
+    Serial.print("⚠️ JSON parse error: ");
+    Serial.println(error.c_str());
+    return;
+  }
 
-  if (String(topic) == SHADOW_DELTA) {
-    if (doc["state"].containsKey("bomba")) {
-      bool estado = doc["state"]["bomba"] == "ON";
-      digitalWrite(PIN_RELE, estado ? HIGH : LOW);
-      Serial.println("Bomba " + String(estado ? "ENCENDIDA" : "APAGADA"));
+  if (String(topic) == SHADOW_DELTA)
+  {
+    if (doc["state"].containsKey("pump"))
+    {
+      bool state = doc["state"]["pump"] == "ON";
+      digitalWrite(RELAY_PIN, state ? HIGH : LOW);
+      Serial.println("Pump " + String(state ? "ENABLED" : "DISABLED"));
     }
 
-    // Nuevo: manejar modo
-    if (doc["state"].containsKey("modo")) {
-      modo = doc["state"]["modo"].as<String>();
-      Serial.println("Modo actualizado a: " + modo);
+    if (doc["state"].containsKey("mode"))
+    {
+      currentMode = doc["state"]["mode"].as<String>();
+      Serial.println("Mode updated to: " + currentMode);
     }
 
     publishShadowState();
   }
 }
 
+void reconnectMQTT()
+{
+  int attempts = 0;
+  const int maxAttempts = 5;
 
-void reconnectMQTT() {
-  while (!mqttClient.connected()) {
-    Serial.print("Conectando a AWS IoT...");
-    if (mqttClient.connect(CLIENT_ID)) {
-      Serial.println("Conectado!");
+  while (!mqttClient.connected() && attempts < maxAttempts)
+  {
+    Serial.print("🔌 Connecting to MQTT... ");
+    if (mqttClient.connect(CLIENT_ID))
+    {
+      Serial.println("✅ Connected!");
       mqttClient.subscribe(SHADOW_DELTA);
-      Serial.println("Suscrito a " + String(SHADOW_DELTA));
       publishShadowState();
-    } else {
-      Serial.print("Error, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" Reintentando en 5s...");
-      delay(5000);
+      break;
     }
+    else
+    {
+      Serial.print("❌ Failed, rc=");
+      Serial.println(mqttClient.state());
+      delay(5000);
+      attempts++;
+    }
+  }
+
+  if (attempts == maxAttempts)
+  {
+    Serial.println("💥 MQTT connection failed. Restarting...");
+    ESP.restart();
   }
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
-  pinMode(PIN_RELE, OUTPUT);
-  digitalWrite(PIN_RELE, LOW);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("Conectando a WiFi...");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180); // 3 min timeout
+
+  if (digitalRead(RESET_BUTTON_PIN) == LOW)
+  {
+    Serial.println("🔁 Reset button pressed: clearing WiFi credentials");
+    wm.resetSettings();
+    ESP.restart();
   }
-  Serial.println("\nConectado!");
 
-  wiFiClient.setCACert(AWS_ROOT_CA);
-  wiFiClient.setCertificate(DEVICE_CERT);
-  wiFiClient.setPrivateKey(PRIVATE_KEY);
+  Serial.println("🌐 Connecting to WiFi...");
+  if (!wm.autoConnect("SmartPot-Setup"))
+  {
+    Serial.println("⚠️ Failed to connect via WiFiManager. Restarting...");
+    ESP.restart();
+  }
+
+  Serial.println("✅ WiFi connected!");
+  Serial.println("IP address: " + WiFi.localIP().toString());
+
+  secureClient.setCACert(AWS_ROOT_CA);
+  secureClient.setCertificate(DEVICE_CERT);
+  secureClient.setPrivateKey(PRIVATE_KEY);
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(callback);
 }
 
-void loop() {
-  if (!mqttClient.connected()) {
+void loop()
+{
+  if (!mqttClient.connected())
+  {
     reconnectMQTT();
   }
+
   mqttClient.loop();
 
   static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 5000) {
+  if (millis() - lastUpdate > 5000)
+  {
     lastUpdate = millis();
 
-    float humedad = sensor.leerHumedad();
-    bool necesitaAgua = nivelAgua.necesitaRecarga();
-    bool bombaEncendida = digitalRead(PIN_RELE);
+    float humidity = soilSensor.leerHumedad();
+    bool needsWater = waterLevelSensor.necesitaRecarga();
+    bool pumpOn = digitalRead(RELAY_PIN);
 
-    if (modo == "AUTOMATICO") {
-      if (humedad < 30 && !necesitaAgua && !bombaEncendida) {
-        bomba.comenzarRiego();
-        Serial.println("Riego automático ACTIVADO: humedad baja.");
-      } else if ((humedad >= 40 || necesitaAgua) && bombaEncendida) {
-        bomba.detenerRiego();
-        Serial.println(necesitaAgua ? "Riego detenido: ¡sin agua!" : "Riego detenido: humedad suficiente.");
+    if (currentMode == "AUTOMATIC")
+    {
+      if (humidity < 30 && !needsWater && !pumpOn)
+      {
+        waterPump.comenzarRiego();
+        Serial.println("🌿 Auto-irrigation ON: low humidity.");
       }
-    } else {
-      Serial.println("Modo MANUAL activo. No se realiza riego automático.");
+      else if ((humidity >= 40 || needsWater) && pumpOn)
+      {
+        waterPump.detenerRiego();
+        Serial.println(needsWater ? "💧 Irrigation stopped: no water." : "✅ Irrigation stopped: humidity OK.");
+      }
+    }
+    else
+    {
+      Serial.println("🛠 Manual mode active. No automatic irrigation.");
     }
 
-    // Protección: nunca regar si no hay agua (independiente del modo)
-    if (necesitaAgua && bombaEncendida) {
-      bomba.detenerRiego();
-      Serial.println("¡Nivel de agua bajo! Riego detenido por seguridad.");
+    if (needsWater && pumpOn)
+    {
+      waterPump.detenerRiego();
+      Serial.println("❌ Safety shutdown: water tank is empty!");
     }
 
     publishShadowState();
 
-    Serial.println("===== Datos del Sistema =====");
-    Serial.print("Modo: "); Serial.println(modo);
-    Serial.print("Humedad: "); Serial.print(humedad); Serial.println("%");
-    Serial.print("Bomba: "); Serial.println(bombaEncendida ? "ON" : "OFF");
-    Serial.print("Nivel agua: "); Serial.println(nivelAgua.leerNivel());
-    Serial.print("Estado flotador: "); Serial.println(nivelAgua.estadoActual() ? "ALTO (suficiente)" : "BAJO (necesita recarga)");
-    Serial.print("Voltaje aprox: "); Serial.print((float)analogRead(PIN_SENSOR_NIVEL) * 3.3 / 4095);Serial.println("V");
-    Serial.println("============================");
+    Serial.println("===== System Report =====");
+    Serial.print("Mode: ");
+    Serial.println(currentMode);
+    Serial.print("Soil Humidity: ");
+    Serial.print(humidity);
+    Serial.println("%");
+    Serial.print("Pump: ");
+    Serial.println(pumpOn ? "ON" : "OFF");
+    Serial.print("Water Level (raw): ");
+    Serial.println(waterLevelSensor.leerNivel());
+    Serial.print("Float State: ");
+    Serial.println(waterLevelSensor.estadoActual() ? "HIGH" : "LOW");
+    Serial.print("Approx Voltage: ");
+    Serial.println((float)analogRead(WATER_LEVEL_SENSOR_PIN) * 3.3 / 4095.0);
+    Serial.println("=========================");
   }
 }
