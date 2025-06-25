@@ -11,7 +11,7 @@
 #define SOIL_SENSOR_PIN 39
 #define RELAY_PIN 4
 #define WATER_LEVEL_SENSOR_PIN 36
-#define RESET_BUTTON_PIN 0 // Opcional: botón para borrar configuración WiFi
+#define RESET_BUTTON_PIN 0
 
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
@@ -23,27 +23,27 @@ bool waterAlertSent = false;
 unsigned long lastWaterAlertTime = 0;
 const unsigned long waterAlertInterval = 3600000; // 1 hora
 
-String currentMode = "AUTOMATIC";
+String currentMode = "AUTOMATICO";
 
 void publishShadowState()
 {
   StaticJsonDocument<512> doc;
-  doc["state"]["reported"]["humidity"] = soilSensor.leerHumedad();
-  doc["state"]["reported"]["pump"] = digitalRead(RELAY_PIN) ? "ON" : "OFF";
-  doc["state"]["reported"]["water_level"] = waterLevelSensor.leerNivel();
-  doc["state"]["reported"]["needs_refill"] = waterLevelSensor.necesitaRecarga();
-  doc["state"]["reported"]["mode"] = currentMode;
+  doc["state"]["reported"]["humedad"] = soilSensor.leerHumedad();
+  doc["state"]["reported"]["bomba"] = digitalRead(RELAY_PIN) ? "ON" : "OFF";
+  doc["state"]["reported"]["nivel_agua"] = waterLevelSensor.leerNivel();
+  doc["state"]["reported"]["necesita_recarga"] = waterLevelSensor.necesitaRecarga();
+  doc["state"]["reported"]["modo"] = currentMode;
 
   if (waterLevelSensor.necesitaRecarga() &&
       (millis() - lastWaterAlertTime > waterAlertInterval || !waterAlertSent))
   {
-    doc["state"]["reported"]["alert"] = "LOW_WATER_LEVEL";
+    doc["state"]["reported"]["alerta"] = "NIVEL_BAJO_AGUA";
     waterAlertSent = true;
     lastWaterAlertTime = millis();
   }
   else if (!waterLevelSensor.necesitaRecarga() && waterAlertSent)
   {
-    doc["state"]["reported"]["alert"] = "NORMAL_WATER_LEVEL";
+    doc["state"]["reported"]["alerta"] = "NIVEL_NORMAL_AGUA";
     waterAlertSent = false;
   }
 
@@ -69,16 +69,16 @@ void callback(char *topic, byte *payload, unsigned int length)
 
   if (String(topic) == SHADOW_DELTA)
   {
-    if (doc["state"].containsKey("pump"))
+    if (doc["state"].containsKey("bomba"))
     {
-      bool state = doc["state"]["pump"] == "ON";
+      bool state = doc["state"]["bomba"] == "ON";
       digitalWrite(RELAY_PIN, state ? HIGH : LOW);
-      Serial.println("Pump " + String(state ? "ENABLED" : "DISABLED"));
+      Serial.println("Bomba " + String(state ? "ENCENDIDA" : "APAGADA"));
     }
 
-    if (doc["state"].containsKey("mode"))
+    if (doc["state"].containsKey("modo"))
     {
-      currentMode = doc["state"]["mode"].as<String>();
+      currentMode = doc["state"]["modo"].as<String>();
       Serial.println("Mode updated to: " + currentMode);
     }
 
@@ -125,7 +125,7 @@ void setup()
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
   WiFiManager wm;
-  wm.setConfigPortalTimeout(180); // 3 min timeout
+  wm.setConfigPortalTimeout(180);
 
   if (digitalRead(RESET_BUTTON_PIN) == LOW)
   {

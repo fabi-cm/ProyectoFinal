@@ -10,5 +10,3 @@ const char PRIVATE_KEY[] = R"EOF(...)EOF";
 
 const char* SHADOW_UPDATE = "$aws/things/prueba1/shadow/update";
 const char* SHADOW_DELTA = "$aws/things/prueba1/shadow/update/delta";
-
-// nueva configuracion
