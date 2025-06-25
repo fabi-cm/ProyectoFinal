@@ -81,6 +81,13 @@ Sistema IoT completo para automatizar el cuidado de plantas con:
      --billing-mode PAY_PER_REQUEST
    ```
 
+3. **S3 + Athena**:
+- Crear bucket: *flowerpotbucket*
+- Guardar datos con prefijo: *maceta/*
+- Crear base de datos en Athena
+- Crear tabla desde Glue o consulta SQL externa
+- Conectar QuickSight → Fuente: Athena → Base: default → Tabla: registros
+
 ## 📊 Comandos de Alexa Ejemplo
 - *"Alexa, pregunta a maceta inteligente por la humedad"*
 - *"Alexa, dile a maceta inteligente que active el modo automático"*
@@ -88,7 +95,8 @@ Sistema IoT completo para automatizar el cuidado de plantas con:
 
 ## 🛡️ Seguridad
 - Conexión MQTT segura con certificados X.509
+- Roles IAM con políticas controladas (IoT, Lambda, S3, DynamoDB, SNS)
 - Validación de datos en todas las capas
 - Alertas por errores críticos
 
-> **Nota**: Reemplazar `TU_SSID`, `TU_PASSWORD` y certificados AWS en `config.h`
+> **Nota**: Ya no es necesario configurar SSID o contraseña en el código. Gracias a **WiFiManager**, el dispositivo crea su propia red llamada SmartPot-Setup si no encuentra WiFi y permite conectarse y configurarlo desde cualquier navegador del celular.
